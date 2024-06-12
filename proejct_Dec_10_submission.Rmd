@@ -1,0 +1,1095 @@
+---
+title: "140xp Dec 10 Final"
+author: |
+  | Jun_Kim
+date: "Dec 10, 2022"
+output:
+  pdf_document: default
+  html_document: default
+subtitle: Fall 2022
+header-includes:
+- \usepackage{float}
+- \renewcommand\thesubsection{\thesection(\alph{subsection})}
+---
+
+Run the chunk below if you can't knit the rmd file.
+```{r}
+# install.packages("webshot")
+# webshot::install_phantomjs()
+```
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(tidymodels)
+library(lubridate)
+library(glmnet)
+library(xgboost)
+library(ranger)
+library(reshape2)
+library(ranger)
+library(ggplot2)
+library(car)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data
+
+```{r}
+#setwd("/Users/euijunkim/Desktop/140_project_Nov21")
+# getwd()
+df <- read_csv("housing.csv")
+head(df)
+nrow(df)
+```
+
+# Cleaning Data (Dealing with NAs)
+
+```{r}
+nrow(df)
+# which(is.na(df$total_bedrooms)) # NA values in total_bedrooms varaible
+sum(is.na(df))
+df2 <- df
+
+## Two ways to dealing with NA values
+# First, we could remove NA values because we lose 207 out of 20640 which is just 1%
+df <- drop_na(df)
+nrow(df)
+
+# Second, we could replace NA values with median so that we can keep 207 observations.
+df2$total_bedrooms[is.na(df2$total_bedrooms)] = median(df2$total_bedrooms , na.rm = TRUE)
+nrow(df2)
+sum(is.na(df2))
+
+df <- as.data.frame(df)
+```
+# Comment:
+Removed NA values/empty cells.
+Decided to drop NA values instead of replacing them with median. Because we only lose 1% by deviding.
+
+
+
+
+
+# EDA
+
+```{r}
+library(plotly)
+p <-
+  plot_ly(
+    df,
+    x = df$longitude,
+    y = df$latitude,
+    z = df$median_house_value,
+    color = df$ocean_proximity,
+    colors = c('#BF382A', '#0C4B8E', "#999999", "#E69F00", "#56B4E9")
+  ) %>%
+  add_markers() %>%
+  layout(scene = list(
+    xaxis = list(title = 'longitude'),
+    yaxis = list(title = 'latitude'),
+    zaxis = list(title = 'median_house_value')
+  ))
+p
+
+```
+
+```{r}
+#latitude vs longitude by ocean_proximity
+
+ggplot(df, 
+       aes(x = latitude,
+           y = longitude,
+           color = ocean_proximity)) +
+  geom_point() +
+  scale_color_manual(values = c('#2196F3','#69b3a2','#FBC02D','#757575','#303F9F')) +
+  labs(title = "location of the houses") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# install.packages("png")
+library(png)
+library(grid)
+california_image <- png::readPNG("/Users/euijunkim/Library/Mobile Documents/com~apple~CloudDocs/UCLA/2022 ucla fall quarter/140/final/Relief_map_of_California.png")
+ggplot(df, aes(x=longitude,y=latitude, col=median_house_value)) + 
+  annotation_custom(rasterGrob(california_image, width = unit(1,"npc"), height = unit(1,"npc")),-Inf, Inf, -Inf, Inf) +
+  geom_point() + scale_color_gradientn(colours = c("blue","green","red"))
+
+mean_pirce <- c(mean(df[df$ocean_proximity == 'ISLAND', 'median_house_value']),
+                mean(df[df$ocean_proximity == '<1H OCEAN', 'median_house_value']),
+                mean(df[df$ocean_proximity == 'INLAND', 'median_house_value']),
+                mean(df[df$ocean_proximity == 'NEAR BAY', 'median_house_value']),
+                mean(df[df$ocean_proximity == 'NEAR OCEAN', 'median_house_value']))
+locations <- c("ISLAND", "<1H OCEAN", "INLAND", "NEAR BAY", "NEAR OCEAN")
+df_ocean_price <- data.frame(locations, mean_pirce)
+df_ocean_price
+```
+
+```{r message=FALSE, warning=FALSE}
+#install.packages('hrbrthemes')
+library(hrbrthemes)
+
+#install.packages('remotes')
+#library(remotes)
+#remotes::install_version("Rttf2pt1", version = "1.3.8")
+
+library(extrafont)
+#import_fonts()
+loadfonts(device="win") 
+
+#housing_median_age and response
+
+ggplot(df,
+       aes(as.factor(housing_median_age),median_house_value)) +
+  geom_boxplot(fill = 'cornflowerblue') +
+  theme_ipsum() +
+  labs(x = 'housing median age',
+       y = 'median house value',
+       title = "housing median age affect median house value") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r message=FALSE, warning=FALSE}
+library(extrafont)
+loadfonts(device = "win")
+
+ggplot(df, aes(x=housing_median_age)) +
+  geom_density(fill="cornflowerblue", color="#e9ecef") +
+  labs(x = 'housing median age',
+       title = "housing median age distribution") +
+  theme_ipsum() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r message=FALSE, warning=FALSE}
+ggplot(df,
+       aes(x=housing_median_age)) +
+  geom_histogram( binwidth=1, fill="cornflowerblue", color="#e9ecef", alpha=0.9) +
+  labs(x = 'housing median age',
+       title = "Housing Median Age Histogram") +
+  theme_ipsum() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r warning=FALSE}
+#median_house_value vs total_rooms 
+
+ggplot(df, aes(x=median_house_value, y=total_rooms)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'median house value',
+       y = 'total rooms',
+       title = 'Median House Value vs Total Rooms') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+```{r warning=FALSE}
+#total_rooms vs total_bedrooms
+
+ggplot(df, aes(x=total_rooms, y=total_bedrooms)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'total rooms',
+       y = 'total bedrooms',
+       title = 'Total Rooms vs Total Bedrooms') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+```{r warning=FALSE}
+#population vs households
+
+ggplot(df, aes(x=population, y=households)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'population',
+       y = 'households',
+       title = 'Population vs Households') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+```{r warning=FALSE}
+#total_bedrooms vs households
+
+ggplot(df, aes(x=total_bedrooms, y=households)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'total bedrooms',
+       y = 'households',
+       title = 'Total Bedrooms vs Households') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+```{r warning=FALSE}
+#total_rooms vs population
+
+ggplot(df, aes(x=total_rooms, y=population)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'total rooms',
+       y = 'population',
+       title = 'Total Rooms vs population') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+```{r warning=FALSE}
+
+#median_income vs median_house_value
+
+ggplot(df, aes(x=median_house_value, y=median_income)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'median house value',
+       y = 'median income',
+       title = 'House Value vs Income') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+```{r warning=FALSE}
+ggplot(df, aes(x=median_income, y=households)) +
+  geom_point(color="#69b3a2",alpha=0.9) +
+  labs(x = 'median income',
+       y = 'households',
+       title = 'Income vs Households') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+
+#households: Total number of households, a group of people residing within a home unit, for a block
+#medianIncome: Median income for households within a block of houses (measured in tens of thousands of US Dollars)
+```
+
+```{r warning=FALSE}
+#housing_median_age vs total_rooms
+
+ggplot(df, aes(x=housing_median_age, y=total_rooms)) +
+  geom_point(color="#69b3a2",alpha=0.9) +
+  labs(y = 'total rooms',
+       x = 'housing median age',
+       title = 'Housing Median Age vs Total Rooms') +
+  geom_smooth(method = 'auto') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+
+#within a block, house with less age most likely to have more rooms 
+```
+
+# Dealing with Total columns
+
+```{r}
+df$mean_rooms = df$total_rooms/df$households
+df$mean_bedrooms = df$total_bedrooms/df$households
+# df$mean_rooms = df$total_rooms/df$population
+# df$mean_bedrooms = df$total_bedrooms/df$population
+new_df = df[,-c(1,2,4,5)]
+M2 <- cor(new_df[,-c(6)])
+library(corrplot)
+corrplot(M2, method = 'number',number.cex=0.6)
+corrplot(M2)
+vif(lm(median_house_value~.,data=new_df[,-c(6)]))
+hypo <- new_df
+
+
+M22 <- cor(new_df[,-c(2,6,7)])
+library(corrplot)
+corrplot(M22)
+```
+# Comment:
+According to the corrplot, we should deal with the "total_rooms", "total_bedroom", "population", "households" and location variables("longitude", "latitude")
+First of all, I tried to divide "total_rooms" and "total_bedrooms" by households not population which makes more sense by logic.
+
+Second, I think (longitude,latitude) and ocean_proximity overlap. Regardless of longitude and latitude, big cities are expensive, and the cities are widely located. I believe that Dropping them (longitude,latitude) looks good for now.
+
+Lastly, population and households also overlap. I will see which one we should drop.
+
+
+
+
+
+
+
+
+# Log vs scale to meet normality assumption
+
+```{r}
+df <- new_df
+par(mfrow=c(3,2))
+### housing_median_age -> no transformation needed
+hist(df$housing_median_age)
+# hist(log(df$housing_median_age))
+# hist(scale(df$housing_median_age))
+# shapiro.test(log(df$housing_median_age))
+# powerTransform(df$housing_median_age)
+# summary((df$housing_median_age)^0.8083664 )
+# hist((df$housing_median_age)^0.8083664)
+# psych::skew(df$housing_median_age)
+# psych::skew(scale(df$housing_median_age))
+# psych::skew(log(df$housing_median_age))
+# psych::skew((df$housing_median_age)^0.8083664)
+# summary(df$housing_median_age)
+# # summary(log(df$housing_median_age))
+# # summary(scale(df$housing_median_age)) # fail
+# summary((df$housing_median_age)^0.8083664)
+
+
+### mean_rooms -> powertransform
+# hist(df$mean_rooms)
+# # hist(scale(df$mean_rooms))
+# hist(log(df$mean_rooms))
+# powerTransform(df$mean_rooms)
+# summary((df$mean_rooms)^-0.3005615)
+hist((df$mean_rooms)^-0.3005615)
+# psych::skew(df$mean_rooms)
+# psych::skew((df$mean_rooms)^-0.3005615)
+
+
+### mean_bedrooms -> powertransform
+# hist(df$mean_bedrooms)
+# hist(scale(df$mean_bedrooms))
+# hist(log(df$mean_bedrooms))
+# summary(scale(df$mean_bedrooms))
+# summary(log(df$mean_bedrooms))
+# powerTransform(df$mean_bedrooms)
+# summary((df$mean_bedrooms)^-1.627276 )
+hist((df$mean_bedrooms)^-1.627276)
+# psych::skew(df$mean_bedrooms)
+# psych::skew((df$mean_bedrooms)^-1.627276)
+# psych::skew(log(df$mean_bedrooms))
+
+### population -> log
+# hist(df$population)
+# hist(log(df$population))
+# hist(scale(df$population))
+# powerTransform(df$population)
+# summary((df$population)^0.2358979 )
+hist((df$population)^0.2358979)
+# psych::skew(df$population)
+# psych::skew((df$population)^0.2358979)
+
+### households ->log
+# hist(df$households)
+# hist(log(df$households))
+# hist(scale(df$households))
+# powerTransform(df$households)
+# summary((df$households)^0.2453846 )
+hist((df$households)^0.2453846)
+# psych::skew(df$households)
+# psych::skew((df$households)^0.2453846)
+
+
+### median_income -> log
+# hist(df$median_income)
+# hist(log(df$median_income))
+# hist(scale(df$median_income))
+# powerTransform(df$median_income)
+# summary((df$median_income)^0.09188503 )
+hist((df$median_income)^0.09188503)
+# psych::skew(df$median_income)
+# psych::skew((df$median_income)^0.09188503)
+
+
+new_df <-
+  transform(
+    df,
+    housing_median_age = df$housing_median_age,
+    mean_rooms = (df$mean_rooms)^-0.3005615,
+    mean_bedrooms = (df$mean_bedrooms)^-1.627276,
+    population = (df$population)^0.2358979,
+    households = (df$households)^0.2453846,
+    median_income = (df$median_income)^0.09188503
+  )
+library(psych)
+psych::skew(new_df$housing_median_age)
+psych::skew(new_df$mean_rooms)
+psych::skew(new_df$mean_bedrooms)
+psych::skew(new_df$population)
+psych::skew(new_df$households)
+psych::skew(new_df$median_income)
+```
+#Comment:
+Our predictors are skewed. I try scaling/log in order to make them follow normaility. But, we could get better result if we  do other transformations those variable later.
+
+
+
+
+
+
+
+# Removing Outlier (just to see what will change)
+
+```{r}
+new_data <- new_df
+boxplot(new_data$median_house_value)$stats
+hist(new_data$median_house_value) # seems to be problematic. There are some super expensive houses.
+# powerTransform(new_data$median_house_value)
+# psych::skew((new_data$median_house_value)^0.1242742)
+# psych::skew(log(new_data$median_house_value))
+# psych::skew(scale(new_data$median_house_value))
+# psych::skew(new_data$median_house_value)
+
+
+# Not sure if I transform the response variable, it gives better model
+#################
+# new_data$median_house_value <- ifelse(new_data$median_house_value < 14999 | new_data$median_house_value > 482200, NA, new_data$median_house_value)
+# table(is.na(new_data$median_house_value))
+# new_data <- drop_na(new_data)
+##################
+new_df <- new_data
+
+library(corrplot)
+M <-cor(new_df[,-c(5,6)])
+corrplot(M, method = 'number',number.cex=0.6) # Same as the one right above, just want to see the numbers
+
+```
+# Comment:
+Removing outlier is not always good solution because there might be some meaningful outliers. But, I will see how the result changes. If we get a better result by removing them, then it is good.
+
+
+
+
+
+
+
+
+
+
+
+
+
+# One-Hot-Encoding vs Reduced-Rank (Dealing with Categorical variable)
+
+```{r}
+#One_Hot_Encoding
+
+# install.packages("caret")
+# library(caret)
+# dmy <- dummyVars(~., data = new_df)
+# data <- data.frame(predict(dmy, newdata = new_df))
+# new_df <- data
+# ## Here, you can actually call library(reshape2) which I think more easier than using library(caret).
+# ## But, it is not a bid deal.
+# 
+# library(dplyr)
+# new_df <- new_df %>% rename(
+#   "<1H_OCEAN" = "ocean_proximity.1H.OCEAN",
+#   "INLAND" = "ocean_proximityINLAND",
+#   "NEAR_BAY" = "ocean_proximityNEAR.BAY",
+#   "NEAR_OCEAN" = "ocean_proximityNEAR.OCEAN"
+# )
+# new_df
+
+new_df$ocean_proximity[new_df$ocean_proximity == '<1H OCEAN'] <- 'less_than_1H_OCEAN'
+
+# Just transform ocean_proximity as factor
+factor_df <- new_df
+factor_df$ocean_proximity = as.factor(factor_df$ocean_proximity)
+
+
+#Reduced-Rank
+dmy<-transform(new_df,
+               less_than_1H_OCEAN = ifelse(ocean_proximity =="less_than_1H_OCEAN", 1, 0),
+               ISLAND = ifelse(ocean_proximity =="ISLAND", 1, 0),
+               NEAR_BAY = ifelse(ocean_proximity =="NEAR BAY", 1, 0),
+               NEAR_OCEAN = ifelse(ocean_proximity =="NEAR OCEAN", 1, 0))
+new_df <- dmy[,-6]
+
+
+
+M3 <- cor(new_df[,-5])
+corrplot(M3, method = 'number',number.cex=0.5)
+new_df = new_df[,-2]
+```
+# Comment:
+Since program can understand number than text, I'd like to convert categorical variable into boolean.
+I believe One-hot-Encoding is a basic method to do that.
+But, we know that it can cause an issue which is an alias issue.
+For example, let's say we have one categorical variable with 5 levels: A, B, C, D, E, and we do one_hot_encoding. Then it is always (A+B+C+D+E=1)
+So, I used another way to encode which reduce one level of factor.
+
+Population and households have high VIF as I expected, .
+And, mean_rooms and mean_bedrooms are little higher than others.
+
+
+
+
+
+```{r}
+# I can't knit this chunk
+
+# install.packages('lares')
+
+# high_cor <- lares::corr_var(new_df, median_house_value)
+# high_cor
+```
+
+
+
+Selection
+
+(1). step function
+```{r}
+# I can't knit this chunk
+
+# fit <- lm(median_house_value ~., data=new_df)
+# library(stats)
+# # Stepwise selection
+# both <- step(fit, direction = "both")
+# both$anova
+```
+
+(2). leaps package
+```{r message=FALSE, warning=FALSE}
+#install.packages('leaps')
+library(leaps)
+regfit.full=regsubsets(median_house_value~.,new_df,nvmax=8)
+reg.summary=summary(regfit.full)
+min_adjr2 <- which.max(reg.summary$adjr2) #9
+min_cp <- which.min(reg.summary$cp) #9
+min_bic <- which.min(reg.summary$bic) #9
+par(mfrow=c(2,2))
+plot(reg.summary$adjr2,type="l",xlab="No. of variables", ylab="Adjusted R2")
+points(min_adjr2,reg.summary$adjr2[min_adjr2],col="red",cex=2,pch=20)
+plot(reg.summary$cp,ylab="Cp",type="l")
+points(min_cp,reg.summary$cp[min_cp],col="red",cex=2,pch=20)
+plot(reg.summary$bic, ylab="BIC",type="l")
+points(min_bic,reg.summary$bic[min_bic],col="red",cex=2,pch=20)
+```
+
+(3)forward
+```{r}
+forward_sel <- regsubsets(median_house_value~., data = new_df, nbest = 1, nvmax = 8, intercept = TRUE, method = "forward", really.big = FALSE)
+sumF <- summary(forward_sel)
+
+plot(sumF$bic, xlab = "Number of Variables", ylab = "BIC", type = "l")
+
+min = which.min(sumF$bic)
+
+points(min, sumF$bic[min], col = "red", cex = 2, pch = 20)
+
+modelwith.minimum.BIC.fwd <- which.min(sumF$bic) 
+
+best.model.fwd <- sumF$which[modelwith.minimum.BIC.fwd,] 
+
+print(best.model.fwd)
+
+print(sum(best.model.fwd))
+```
+
+(4)backward
+```{r}
+
+backward_sel <- regsubsets(median_house_value~., data = new_df, nbest = 1, nvmax = 8, intercept = TRUE, method = "backward",really.big = FALSE) 
+sumB <- summary(backward_sel)
+plot(sumB$bic, xlab = "Number of Variables", ylab = "BIC", type = "l") 
+min = which.min(sumB$bic)
+points(min, sumB$bic[min], col = "red", cex = 2, pch = 20)
+modelwith.minimum.BIC.bwd <- which.min(sumB$bic) 
+
+best.model.bwd <- sumB$which[modelwith.minimum.BIC.bwd,] # This is the best model.
+print(best.model.bwd)
+print(sum(best.model.bwd))
+```
+(5)pca
+```{r}
+pca_dt <- prcomp(new_df,
+                 center = T,
+                 scale. = T)
+plot(pca_dt,
+     type = "l")
+```
+
+
+
+
+
+# MLR
+
+
+
+```{r}
+#remove population
+#This is an initial model
+new_data <- new_df
+
+fit2 <- lm(median_house_value ~., data=new_data) 
+summary(fit2)
+anova(fit2)
+par(mfrow=c(2,2))
+plot(fit2)
+vif(fit2)
+
+
+# Inverse transformation
+
+library(alr4)
+invResPlot(fit2)
+fit22 <- lm(median_house_value^0.03213587 ~., data=new_data)
+summary(fit22)
+par(mfrow=c(2,2))
+plot(fit22)
+
+
+# Box-Cox
+transform.y <- powerTransform(fit2)
+summary(transform.y)
+fit222 <- lm(median_house_value^0.05 ~., data=new_data) 
+summary(fit222)
+par(mfrow=c(2,2))
+plot(fit222)
+
+fit2222 <- lm(log(median_house_value) ~., data=new_data) 
+summary(fit2222)
+par(mfrow=c(2,2))
+plot(fit2222)
+```
+# Comment:
+R^2 is around 0.65
+
+
+
+```{r}
+# remove mean_bedrooms 
+new_data2 <- new_data[,-6]
+fit3 <- lm(median_house_value ~., data=new_data2)
+summary(fit3)
+anova(fit3)
+par(mfrow=c(2,2))
+plot(fit3)
+vif(fit3)
+
+
+library(alr4)
+invResPlot(fit3)
+fit33 <- lm(median_house_value^-0.002726526 ~., data=new_data2)
+summary(fit33)
+par(mfrow=c(2,2))
+plot(fit3)
+
+
+# Box-Cox
+transform.y3 <- powerTransform(fit3)
+summary(transform.y3)
+fit333 <- lm(median_house_value^0.04 ~., data=new_data2)
+summary(fit333)
+par(mfrow=c(2,2))
+plot(fit333)
+
+
+fit3333 <- lm(log(median_house_value) ~., data=new_data2)
+summary(fit3333)
+par(mfrow=c(2,2))
+plot(fit3333)
+
+```
+# Comment:
+R^2 is around 0.64
+
+
+
+```{r}
+#remove mean_rooms
+new_data3 <- new_data[,-5]
+fit4 <- lm(median_house_value ~., data=new_data3)
+summary(fit4)
+anova(fit4)
+par(mfrow=c(2,2))
+plot(fit4)
+vif(fit4)
+
+library(alr4)
+invResPlot(fit4)
+fit44 <- lm(median_house_value^0.03497588 ~., data=new_data3)
+summary(fit44)
+par(mfrow=c(2,2))
+plot(fit44)
+
+# Box-Cox
+transform.y4 <- powerTransform(fit4)
+summary(transform.y4)
+fit444 <- lm(median_house_value^0.05 ~., data=new_data3)
+summary(fit444)
+par(mfrow=c(2,2))
+plot(fit444)
+
+# log
+fit4444 <- lm(log(median_house_value) ~., data=new_data3)
+summary(fit4444)
+
+```
+# Comment:
+R^2 is around 0.64
+
+
+
+
+```{r}
+# Powertransform for predictors
+library(car)
+#remove bedroom
+summary(powerTransform(as.matrix(new_data2[c(1,2,3,4,5)])~1))
+transform_m <- transform(new_data2, 
+                   housing_median_age = housing_median_age^0.80,
+                   households = households^1.12,
+                   median_income = median_income^2.47,
+                   median_house_value = median_house_value^0.5,
+                   mean_rooms = mean_rooms^1.19)
+
+transform_fit <- lm(median_house_value~.,transform_m)
+summary(transform_fit)
+vif(transform_fit)
+par(mfrow=c(2,2))
+plot(transform_fit)
+
+
+#remove rooms
+summary(powerTransform(as.matrix(new_data3[c(1,2,3,4,5)])~1))
+transform_m2 <- transform(new_data3, 
+                   housing_median_age = housing_median_age^0.80,
+                   households = households^1.12,
+                   median_income = median_income^2.22,
+                   median_house_value = median_house_value^0.18,
+                   mean_bedrooms = mean_bedrooms^1.00)
+
+transform_fit2 <- lm(median_house_value~.,transform_m2)
+summary(transform_fit2)
+vif(transform_fit2)
+par(mfrow=c(2,2))
+plot(transform_fit2)
+```
+# Comment:
+R^2 is around 0.64
+
+
+
+
+
+#Things to do
+
+1. Try interaction terms expecting higher R^2
+```{r}
+# library(lares)
+# corr_cross(new_data[,-c(4)], # name of dataset
+#   max_pvalue = 0.05, # display only significant correlations (at 5% level)
+#   top = 10 # display top 9 couples of variables (by correlation coefficient)
+# )
+
+# fit5 <- lm(median_house_value~.
+#            +housing_median_age:median_income
+#            +housing_median_age:median_house_value
+#            +households:median_house_value
+#            +households:mean_rooms
+#            +median_income:median_house_value
+#            +median_income:mean_rooms
+#            +median_income:mean_bedrooms
+#            +median_house_value:mean_rooms
+#            +median_house_value:mean_bedrooms
+#            ,new_data)
+# summary(fit5)
+# par(mfrow=c(2,2))
+# plot(fit5)
+# vif(fit5)
+```
+I tried some interaction terms, but no improvement.
+
+
+
+
+
+
+# Linear Regression model using Cross Validation
+
+```{r}
+set.seed(1000)
+data_with_rooms <- new_data2
+data_with_bedrooms <- new_data3
+# CV_data <- data_with_rooms
+CV_data <- data_with_bedrooms
+library(caret)
+formula = median_house_value ~ .
+fitControl <- trainControl(method="cv",number = 5)
+HousingDataModel = train(formula, data = CV_data,
+                   method = "lm",trControl = fitControl,metric="RMSE")
+importance = varImp(HousingDataModel)
+
+
+PlotImportance = function(importance)
+{
+  varImportance <- data.frame(Variables = row.names(importance[[1]]), 
+                              Importance = round(importance[[1]]$Overall,2))
+  
+  rankImportance <- varImportance %>%
+    mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+  
+  rankImportancefull = rankImportance
+  
+  ggplot(rankImportance, aes(x = reorder(Variables, Importance), 
+                             y = Importance)) +
+    geom_bar(stat='identity',colour="white") +
+    geom_text(aes(x = Variables, y = 1, label = Rank),
+              hjust=0, vjust=.5, size = 4, colour = 'black',
+              fontface = 'bold') +
+    labs(x = 'Variables', title = 'Relative Variable Importance') +
+    coord_flip() + 
+    theme_bw()
+}
+PlotImportance(importance)
+HousingDataModel
+```
+
+
+
+
+# Ridge and Lasso Regression
+
+```{r}
+set.seed(1001)
+data_with_rooms <- new_data2
+data_with_bedrooms <- new_data3
+# RR_data <- data_with_rooms
+RR_data <- data_with_bedrooms
+library(caret)
+formula2 = median_house_value ~ .
+fitControl2 <- trainControl(method="cv",number = 5)
+HousingDataModel2 = train(formula, data = RR_data,
+                   method = "glmnet",trControl = fitControl2,metric="RMSE")
+importance = varImp(HousingDataModel2)
+
+PlotImportance = function(importance)
+{
+  varImportance <- data.frame(Variables = row.names(importance[[1]]), 
+                              Importance = round(importance[[1]]$Overall,2))
+  rankImportance <- varImportance %>%
+    mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+  rankImportancefull = rankImportance
+  
+  ggplot(rankImportance, aes(x = reorder(Variables, Importance), 
+                             y = Importance)) +
+    geom_bar(stat='identity',colour="white") +
+    geom_text(aes(x = Variables, y = 1, label = Rank),
+              hjust=0, vjust=.5, size = 4, colour = 'black',
+              fontface = 'bold') +
+    labs(x = 'Variables', title = 'Relative Variable Importance') +
+    coord_flip() + 
+    theme_bw()
+}
+
+PlotImportance(importance)
+HousingDataModel2
+```
+
+
+
+
+## XGBoost
+
+```{r}
+set.seed(1000)
+data_with_rooms <- new_data2
+data_with_bedrooms <- new_data3
+# XG_data <- data_with_rooms
+XG_data <- data_with_bedrooms
+
+xgbGrid <- expand.grid(nrounds = 500,
+                       max_depth = 4,
+                       eta = .05,
+                       gamma = 0,
+                       colsample_bytree = .5,
+                       min_child_weight = 1,
+                       subsample = 1)
+formula = log(median_house_value) ~ .
+fitControl <- trainControl(method="cv",number = 5)
+HousingDataModelXGB = train(formula, data = XG_data,
+                   method = "xgbTree",trControl = fitControl,
+                   tuneGrid = xgbGrid,na.action = na.pass,metric="RMSE")
+importance = varImp(HousingDataModelXGB)
+PlotImportance(importance)
+HousingDataModelXGB
+```
+# Comment:
+R^2 is 0.69 ( best so far)
+
+
+
+
+
+# Random forest
+
+```{r}
+set.seed(1000)
+library('tidyverse')
+library('tidymodels')
+
+data_with_rooms <- new_data2
+data_with_bedrooms <- new_data3
+
+# final_dat <- data_with_rooms
+# final_dat$median_house_value = log(final_dat$median_house_value)
+
+final_dat <- data_with_bedrooms
+final_dat$median_house_value = log(final_dat$median_house_value)
+
+final_dat -> final_pre
+final_pre %>%
+  initial_split(prop=0.8) -> final_split
+
+final_split %>% training() %>%
+  recipe(median_house_value~.) %>%
+  prep() -> final_recipe
+
+final_recipe %>%
+  bake(final_split %>% testing()) -> final_testing
+
+final_recipe %>%
+  juice() -> final_training
+
+rand_forest(trees=100, mode='regression') %>%
+  set_engine('randomForest') %>%
+  fit(median_house_value~., data=final_training) -> final_rf
+
+
+library(yardstick)
+final_rf %>%
+  predict(final_testing) %>%
+  bind_cols(final_testing) %>%
+  metrics(truth=median_house_value, estimate=.pred)
+
+final_pre %>%
+  recipe(median_house_value~.) %>%
+  prep() -> final_recipe2
+
+final_recipe2 %>%
+  bake(final_pre) -> final_testing_pre
+
+final_recipe2 %>%
+  juice() -> final_training_pre
+
+rand_forest(trees=100, mode='regression') %>%
+  set_engine('randomForest', localImp=TRUE) %>%
+  fit(median_house_value~., data=final_training_pre) -> final_rf2
+
+pp <- final_rf2 %>%
+  predict(final_testing_pre) %>%
+  bind_cols(final_pre)
+
+
+# scatterplot(pp$median_house_value,pp$.pred)
+# summary(lm(median_house_value~.pred,pp))
+x <- pp$.pred
+y <- pp$median_house_value
+plot(x, y, main = "Predicted median_house_price VS Actual median_house_price",
+     xlab = "Predicted median_house_price", ylab = "Actual median_house_price",
+     pch = 19, frame = FALSE)
+abline(lm(y ~ x, data = pp), col = "blue")
+abline(a=0, b=1, col= "red")
+
+# install.packages('randomForestExplainer')
+library('randomForestExplainer')
+
+measure_importance(final_rf2$fit)
+
+measure_importance(final_rf2$fit) %>%
+  as_tibble() %>%
+  mutate(imp=node_purity_increase*100/max(node_purity_increase)) %>%
+  arrange(-imp) %>%
+  select(variable, imp) # Rank of important predictors
+
+```
+# Comment:
+R^2 is 0.67
+
+
+
+
+
+
+# Overleaf Analysis:
+
+1) A home’s proximity to the ocean affects median housing value - Assuming ocean proximity variable is $\beta_n$ 
+
+$$H_0: \beta_{n1} = \beta_{n2} = ... = \beta_{n5}$$  
+
+$$H_a: \beta_{n1} \neq \beta_{nj}, j = 1,...,5$$
+
+```{r}
+
+summary(lm(median_house_value ~ factor(ocean_proximity), hypo))
+
+```
+
+
+We reject the null hypothesis. We can conclude that there is at least one ocean proximity variable are significant when all other variables are on the model.
+
+We can also see the relationship from the plot.
+
+```{r}
+# setwd("/Users/euijunkim/Desktop/140_project_Nov21")
+ori_data <- data <- read.csv("housing.csv")
+ori_data$ocean_proximity <- factor(data$ocean_proximity)
+
+
+ggplot(ori_data, aes(x=ocean_proximity, y=median_house_value, fill = ocean_proximity)) + 
+  geom_bar(stat = "identity") +
+  coord_flip()
+
+```
+
+The house <1H Ocean worth more value.
+
+
+2) Housing median age affects median housing value
+
+
+```{r}
+summary(lm(median_house_value ~ housing_median_age, hypo))
+```
+
+
+We reject the null hypothesis. We can conclude that housing median age is significant predictors.
+
+
+```{r}
+ggplot(data,
+       aes(as.factor(housing_median_age),median_house_value)) +
+  geom_boxplot(fill = 'cornflowerblue') +
+  theme_ipsum() +
+  labs(x = 'housing median age',
+       y = 'median house value',
+       title = "housing median age affect median house value") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Probably housing median age greater than 51 would worth more value as their maximum house value are higher than all other housing age.
+
+
+
+3) Population increases median housing value
+
+
+```{r}
+t.test(data$population, data$median_house_value, alternative = c('greater'))
+```
+
+
+We see that there is not a statistically significant difference in means.
+
+
+```{r}
+ggplot(data, aes(x=population, y=median_house_value)) +
+  geom_line(color="#69b3a2",alpha=0.9) +
+  labs(x = 'population',
+       y = 'median house value',
+       title = 'Population vs Median House Value') +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme_ipsum()
+```
+
+
+The plot supports the t-test result which population does not increase the median house value.
+
+
+
